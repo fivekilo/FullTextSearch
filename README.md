@@ -21,12 +21,12 @@
 └────────────┘      JSON Response       └────────────┘    JSON Response    └───────────────┘
 ```
 
-| 层级 | 技术 | 目录 |
-|------|------|------|
-| 数据导入 | Node.js 脚本 | `scripts/` |
-| 检索后端 | Express + fetch | `backend/` |
+| 层级     | 技术                       | 目录        |
+| -------- | -------------------------- | ----------- |
+| 数据导入 | Node.js 脚本               | `scripts/`  |
+| 检索后端 | Express + fetch            | `backend/`  |
 | 前端界面 | Vue 3 + Tailwind CSS (CDN) | `frontend/` |
-| 搜索引擎 | Elasticsearch | 外部服务 |
+| 搜索引擎 | Elasticsearch              | 外部服务    |
 
 ## 快速开始
 
@@ -52,7 +52,17 @@ npm start
 
 后端监听 `http://localhost:5000`，详见 [backend/README.md](backend/README.md)
 
-### 4. 打开前端
+### 4. 运行算法评测
+
+在项目根目录下新开一个终端：
+
+```bash
+node evaluation/evaluator.js
+```
+
+详见 [evaluation/README.md](evaluation/README.md)
+
+### 5. 打开前端
 
 浏览器直接打开 `frontend/index.html` 即可使用。
 
@@ -73,6 +83,10 @@ FullTextSearch/
 │   ├── esQuery.js          # ES 查询构建器：DSL 生成、排序、结果聚合
 │   ├── package.json        # 后端依赖
 │   └── README.md           # 后端 API 文档
+├── evaluation/             # 排序与评测模块
+│   ├── evaluator.js        # NDCG 自动化评测脚本
+│   ├── results.txt         # 评测输出记录
+│   └── README.md           # 算法改进与评测说明
 └── frontend/
     ├── index.html          # 搜索界面（Vue 3 + Tailwind CSS）
     └── README.md           # 前端说明
@@ -80,9 +94,9 @@ FullTextSearch/
 
 ## 模块分工
 
-| 模块 | 内容 | 状态 |
-|------|------|------|
+| 模块                  | 内容                                   | 状态      |
+| --------------------- | -------------------------------------- | --------- |
 | 1. 数据整理 + ES 导入 | 统一数据格式、设计 mapping、写导入脚本 | ✅ 已完成 |
-| 2. 检索后端 | 搜索接口、布尔查询、分页，与 ES 联调 | ✅ 已完成 |
-| 3. 排序与评测 | 设计综合排序、效果评估、整理实验结果 | 进行中 |
-| 4. 前端与汇报 | 搜索页面、结果展示、README、PPT、演示 | ✅ 已完成 |
+| 2. 检索后端           | 搜索接口、布尔查询、分页，与 ES 联调   | ✅ 已完成 |
+| 3. 排序与评测         | 设计综合排序、效果评估、整理实验结果   | ✅ 已完成 |
+| 4. 前端与汇报         | 搜索页面、结果展示、README、PPT、演示  | ✅ 已完成 |
