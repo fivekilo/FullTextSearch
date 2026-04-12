@@ -60,6 +60,11 @@
 
         <!-- 搜索结果区 -->
         <main v-if="hasSearched">
+            <!-- 错误提示 -->
+            <div v-if="searchError" class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-6">
+                {{ searchError }}
+            </div>
+
             <!-- 统计信息 -->
             <div class="text-sm text-gray-500 mb-6 border-b pb-2">
                 找到约 {{ results.length }} 条结果，用时 {{ searchTime }} 秒
@@ -117,9 +122,11 @@
         </main>
     </div>
 
-    <!-- 模拟交互脚本 -->
     <script>
         const { createApp, ref } = Vue;
+
+        // 后端 API 地址（按需修改）
+        const API_BASE = 'http://localhost:5000';
 
         createApp({
             setup() {
@@ -129,49 +136,39 @@
                 const hasSearched = ref(false);
                 const searchTime = ref('0.00');
                 const results = ref([]);
+                const searchError = ref('');
 
-                // 模拟的演示数据（实际应通过 axios/fetch 请求后端 API）
-                const mockSearch = () => {
+                const handleSearch = async () => {
+                    const keyword = searchQuery.value.trim();
+                    if (!keyword) return;
+
                     hasSearched.value = true;
-                    // 模拟网络延迟
-                    setTimeout(() => {
-                        searchTime.value = (Math.random() * 0.5 + 0.1).toFixed(2);
-                        if (!searchQuery.value) {
-                            results.value = [];
-                            return;
-                        }
-                        
-                        // 伪造一点结果用于前端展示
-                        results.value = [
-                            {
-                                id: 'doc1',
-                                course_name: '自然语言处理课程',
-                                _score: useCustomRanking.value ? 23.45 : 12.01,
-                                question: '什么是' + searchQuery.value + '？',
-                                best_answer: { quality: 4, content: '这是一种让计算机理解和处理人类语言的技术...' },
-                                answers: [
-                                    { answer_quality: 4, answer: '这是一种让计算机理解和处理人类语言的技术...' },
-                                    { answer_quality: 2, answer: '和文字处理有关的东西。' }
-                                ],
-                                showMore: false
-                            },
-                            {
-                                id: 'doc2',
-                                course_name: '机器学习',
-                                _score: useCustomRanking.value ? 19.88 : 11.20,
-                                question: '如何利用' + searchQuery.value + '进行文本挖掘？',
-                                best_answer: { quality: 5, content: '我们可以通过构建词向量模型并且分析上下文关系，结合TF-IDF算法...' },
-                                answers: [
-                                    { answer_quality: 5, answer: '我们可以通过构建词向量模型并且分析上下文关系，结合TF-IDF算法...' }
-                                ],
-                                showMore: false
-                            }
-                        ];
-                    }, 300);
-                };
+                    searchError.value = '';
+                    results.value = [];
 
-                const handleSearch = () => {
-                    mockSearch();
+                    try {
+                        const response = await fetch(`${API_BASE}/api/search`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                keyword,
+                                logic: logicType.value,
+                                use_custom_ranking: useCustomRanking.value,
+                            }),
+                        });
+
+                        if (!response.ok) {
+                            const err = await response.json().catch(() => ({}));
+                            throw new Error(err.error || `请求失败 (${response.status})`);
+                        }
+
+                        const data = await response.json();
+                        results.value = data.hits || [];
+                        searchTime.value = data.took || '0.00';
+                    } catch (err) {
+                        console.error('搜索请求失败', err);
+                        searchError.value = err.message || '网络错误，请确认后端服务已启动';
+                    }
                 };
 
                 return {
@@ -181,6 +178,7 @@
                     hasSearched,
                     searchTime,
                     results,
+                    searchError,
                     handleSearch
                 };
             }
