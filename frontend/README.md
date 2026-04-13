@@ -12,10 +12,15 @@
 - **[Vue 3 (Global Build)](https://vuejs.org/)**：用于数据绑定、DOM 渲染控制及逻辑映射。
 - **[Tailwind CSS (CDN)](https://tailwindcss.com/)**：用于快速、现代化的响应式页面 UI 布局。
 
-## 运行方式
+## 运行方式（前后端联调测试）
 
-无需任何 `npm install` 操作或构建步骤。
-直接在文件管理器中双击 `index.html` 文件，使用任意现代浏览器（如 Chrome, Edge, Firefox）打开即可查看并交互。
+前端本身不需要 `npm install`。您可以直接用现代浏览器打开 `index.html`。但要获得真实搜索数据，需启动整套服务（含 ES 数据与后端 API）。
+
+1. 确保您的电脑上已经启动好了本地的 **Elasticsearch** (运行在 `http://localhost:9200`)。
+2. 在项目根目录执行 `npm install --prefix backend` 初始化后端环境。
+3. 执行 `npm run import-data` 导入测试数据集至 ES 索引。
+4. 执行 `npm start` 启动本地提供支持查询服务的 Node.js API (监听 `http://localhost:5000`)。
+5. 双击 `index.html` 打开浏览器，输入关键词尝试搜索（如“自然语言”、“分类”等）。
 
 ## 目录结构
 
@@ -36,31 +41,4 @@ frontend/
 3. **数据结构展现**
    兼容原始 `course_qa.json` 结构，支持单个问题包含**多个备选回答**的展示，支持一键折叠/展开所有回答记录，方便对同一个检索结果的不同回答质量进行对比评价。
 
-## 后续对接后端指南 (TODO)
-
-当前 `index.html` 使用了前端模拟数据（`mockSearch` 函数）来演示界面交互。当后端 Elasticsearch API 开发完毕后，需要进行以下简单替换：
-
-1. 在 HTML 中找到 `script` 标签内的 `mockSearch` 逻辑。
-2. 将其替换为原生的 `fetch` 或者引入 `axios` 发起真实的 HTTP 请求：
-   ```javascript
-   const handleSearch = async () => {
-       hasSearched.value = true;
-       try {
-           const response = await fetch(`http://localhost:5000/api/search`, {
-               method: 'POST',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({
-                   keyword: searchQuery.value,
-                   logic: logicType.value,
-                   use_custom_ranking: useCustomRanking.value
-               })
-           });
-           const data = await response.json();
-           results.value = data.hits; // 替换为真实的后端返回结构
-           searchTime.value = data.took;
-       } catch (error) {
-           console.error("搜索请求失败", error);
-       }
-   };
-   ```
-3. 根据后端接口实际返回的 JSON 结构，微调页面模板 ( `<template>` ) 中绑定的字段名称即可。
+*(注：该项目现已打通真实后端。调用本地提供的 `http://localhost:5000/api/search` Fetch 请求即可进行真正的 Elasticsearch 检索。)* 

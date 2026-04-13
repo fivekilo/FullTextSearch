@@ -32,37 +32,39 @@
 
 ### 1. 启动 Elasticsearch
 
+确保你的计算机上已经安装了 Elasticsearch。
+1. 前往 [Elasticsearch 官网](https://www.elastic.co/cn/downloads/elasticsearch) 下载并解压。
+2. 打开 `config/elasticsearch.yml`，在末尾加上 `xpack.security.enabled: false` 方便本地无鉴权开发。
+3. 运行 `bin/elasticsearch.bat`。
 确保 ES 运行在 `http://localhost:9200`。
 
-### 2. 导入数据
+### 2. 初始化环境依赖
+
+在项目根目录下执行，安装 Node.js 后端模块：
 
 ```bash
-node scripts/import_to_es.js --force-recreate
+npm install --prefix backend
 ```
 
-详见 [scripts/README.md](scripts/README.md)
+### 3. 导入数据到 Elasticsearch
 
-### 3. 启动后端
+使用我们配置好的脚本将 QA 数据一键导入 ES：
 
 ```bash
-cd backend
-npm install
+npm run import-data
+```
+
+### 4. 启动后端
+
+在项目根目录下启动 Node.js 后端接口：
+
+```bash
 npm start
 ```
 
-后端监听 `http://localhost:5000`，详见 [backend/README.md](backend/README.md)
+后端监听在 `http://localhost:5000`。
 
-### 4. 运行算法评测
-
-在项目根目录下新开一个终端：
-
-```bash
-node evaluation/evaluator.js
-```
-
-详见 [evaluation/README.md](evaluation/README.md)
-
-### 5. 打开前端
+### 5. 运行算法评测 (可选)
 
 浏览器直接打开 `frontend/index.html` 即可使用。
 

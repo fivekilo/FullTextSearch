@@ -1,0 +1,10 @@
+{
+  "name": "edusearch",
+  "version": "1.0.0",
+  "description": "EduSearch 课程问答检索完整项目",
+  "scripts": {
+    "postinstall": "npm install --prefix backend",
+    "start": "npm start --prefix backend",
+    "import-data": "node scripts/import_to_es.js --data-file data/course_qa.json --force-recreate"
+  }
+}
