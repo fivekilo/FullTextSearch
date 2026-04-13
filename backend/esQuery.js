@@ -84,7 +84,7 @@ function buildSearchBody(keyword, logic, useCustomRanking, from = 0, size = 100)
               },
             },
           ],
-          boost_mode: "sum",
+          boost_mode: "multiply",
         },
       }
     : baseQuery;
