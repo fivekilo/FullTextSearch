@@ -52,9 +52,24 @@
                     <span>包含任意 (OR)</span>
                 </label>
                 <label class="flex items-center space-x-2 cursor-pointer">
+                    <input type="radio" v-model="logicType" value="not" class="form-radio text-blue-600 h-4 w-4">
+                    <span>排除词 (NOT)</span>
+                </label>
+                <label class="flex items-center space-x-2 cursor-pointer">
                     <input type="checkbox" v-model="useCustomRanking" class="form-checkbox text-blue-600 h-4 w-4">
                     <span>启用综合排序算法 (质量分加权)</span>
                 </label>
+            </div>
+            <!-- NOT 模式排除关键词输入框 -->
+            <div v-if="logicType === 'not'" class="mt-4 max-w-xl mx-auto">
+                <input 
+                    type="text" 
+                    v-model="excludeQuery" 
+                    @keyup.enter="handleSearch"
+                    placeholder="输入要排除的关键词，例如：机器翻译" 
+                    class="w-full py-2 px-4 border border-red-300 rounded-lg outline-none text-sm text-gray-700 focus:ring-2 focus:ring-red-300 bg-red-50"
+                >
+                <p class="text-xs text-gray-400 mt-1">结果将包含搜索词，但排除此处填写的词</p>
             </div>
         </header>
 
@@ -88,8 +103,10 @@
                         
                         <!-- 最佳回答预览 -->
                         <div class="text-gray-600 mt-2 text-sm leading-relaxed">
-                            <span class="inline-block bg-green-100 text-green-800 text-xs px-2 py-0.5 rounded mr-2" v-if="res.best_answer.quality >= 4">高质量回答</span>
-                            <span class="inline-block bg-yellow-100 text-yellow-800 text-xs px-2 py-0.5 rounded mr-2" v-else-if="res.best_answer.quality >= 2">普通回答</span>
+                            <span class="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded mr-2">自定义评分: {{ res.best_answer.custom_score }}</span>
+                            <span class="inline-block bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded mr-2">标注Q: {{ res.best_answer.quality }}</span>
+                            <span class="inline-block bg-green-100 text-green-800 text-xs px-2 py-0.5 rounded mr-2" v-if="res.best_answer.custom_score >= 6">高质量回答</span>
+                            <span class="inline-block bg-yellow-100 text-yellow-800 text-xs px-2 py-0.5 rounded mr-2" v-else-if="res.best_answer.custom_score >= 3">普通回答</span>
                             <p class="inline whitespace-pre-line">{{ res.best_answer.content }}...</p>
                         </div>
                         
@@ -102,7 +119,11 @@
                             
                             <div v-if="res.showMore" class="mt-4 space-y-3 pl-4 border-l-2 border-gray-200">
                                 <div v-for="(ans, idx) in res.answers" :key="idx" class="bg-gray-50 p-3 rounded">
-                                    <div class="text-xs text-gray-500 mb-1">质量分评级: {{ ans.answer_quality }}</div>
+                                    <div class="text-xs mb-1 flex items-center gap-2">
+                                        <span class="text-blue-600 font-medium">自定义评分: {{ ans.custom_score }}</span>
+                                        <span class="text-gray-400">|</span>
+                                        <span class="text-gray-500">标注Q: {{ ans.answer_quality }}</span>
+                                    </div>
                                     <div class="text-gray-700">{{ ans.answer }}</div>
                                 </div>
                             </div>
@@ -133,6 +154,7 @@
                 const searchQuery = ref('');
                 const logicType = ref('match');
                 const useCustomRanking = ref(true);
+                const excludeQuery = ref('');
                 const hasSearched = ref(false);
                 const searchTime = ref('0.00');
                 const results = ref([]);
@@ -154,6 +176,7 @@
                                 keyword,
                                 logic: logicType.value,
                                 use_custom_ranking: useCustomRanking.value,
+                                exclude: excludeQuery.value.trim(),
                             }),
                         });
 
@@ -175,6 +198,7 @@
                     searchQuery,
                     logicType,
                     useCustomRanking,
+                    excludeQuery,
                     hasSearched,
                     searchTime,
                     results,

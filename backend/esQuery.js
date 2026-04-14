@@ -68,8 +68,20 @@ function buildBaseQuery(keyword, logic) {
  * @param {number}  size   每页条数
  * @returns {object} 完整的 ES 请求体
  */
-function buildSearchBody(keyword, logic, useCustomRanking, from = 0, size = 100) {
-  const baseQuery = buildBaseQuery(keyword, logic);
+function buildSearchBody(keyword, logic, useCustomRanking, from = 0, size = 100, exclude = "") {
+  let baseQuery = buildBaseQuery(keyword, logic);
+
+  // NOT 排除逻辑：包含 keyword 但排除 exclude 中的词
+  if (exclude && exclude.trim()) {
+    baseQuery = {
+      bool: {
+        must: [baseQuery],
+        must_not: [
+          { multi_match: { query: exclude.trim(), fields: ["question", "answer"] } },
+        ],
+      },
+    };
+  }
 
   const query = useCustomRanking
     ? {
@@ -126,19 +138,52 @@ async function executeSearch(body) {
   return res.json();
 }
 
+/* ---------- 自定义答案评分：不使用 answer_quality ---------- */
+
+/**
+ * 为同一问题组内的每个答案计算自定义评分（0-9 范围）。
+ *
+ * 三个维度:
+ *   F1 — 回答长度（权重 0.50）: 更详尽的回答通常质量越高
+ *   F2 — ES 文本相关性（权重 0.25）: answer 与 query 的 BM25 匹配度
+ *   F3 — 词汇丰富度（权重 0.25）: 去重字符数越多，信息密度越大
+ *
+ * @param {Array}  answers  包含 _hit_score / answer 的答案数组
+ */
+function computeCustomScores(answers) {
+  if (answers.length === 0) return;
+
+  // ------- F2 归一化所需的组内极值 -------
+  const hitScores = answers.map(a => a._hit_score);
+  const maxS = Math.max(...hitScores);
+  const minS = Math.min(...hitScores);
+  const range = maxS - minS;
+
+  for (const ans of answers) {
+    // F1: 回答长度, 线性归一化，在 ~150 字符饱和
+    const f1 = Math.min(ans.answer.length / 150, 1);
+
+    // F2: ES 相关性分数, 组内 min-max 归一化
+    const f2 = range > 0 ? (ans._hit_score - minS) / range : 0.5;
+
+    // F3: 去标点后不重复字符数, 在 ~80 种字符饱和
+    const cleaned = ans.answer.replace(/[\s，。？！、""''：；（）\d\w.,:;!?]/g, "");
+    const uniqueChars = new Set(cleaned).size;
+    const f3 = Math.min(uniqueChars / 80, 1);
+
+    // 加权求和 → 映射到 0-9
+    ans.custom_score = parseFloat(((0.50 * f1 + 0.25 * f2 + 0.25 * f3) * 9).toFixed(1));
+
+    // 清除中间字段
+    delete ans._hit_score;
+  }
+}
+
 /* ---------- 结果聚合：扁平文档 → 按问题分组 ---------- */
 
 /**
  * 将 ES 返回的扁平文档按 (dataset, question_id) 分组，
  * 转换成前端期望的结构。
- *
- * 前端期望每条 hit:
- * {
- *   id, course_name, _score, question,
- *   best_answer: { quality, content },
- *   answers: [{ answer_quality, answer }],
- *   showMore: false
- * }
  */
 function aggregateHits(esHits) {
   const groups = new Map();
@@ -159,7 +204,7 @@ function aggregateHits(esHits) {
 
     const group = groups.get(key);
 
-    // 保留组内最高分
+    // 保留组内最高 ES 分
     if (hit._score > group._score) {
       group._score = hit._score;
     }
@@ -167,18 +212,22 @@ function aggregateHits(esHits) {
     group.answers.push({
       answer_quality: src.answer_quality,
       answer: src.answer,
+      _hit_score: hit._score, // 暂存，用于 computeCustomScores
     });
   }
 
-  // 后处理：排序 answers、选出 best_answer
+  // 后处理：计算自定义评分 → 按自定义评分排序 → 选出最佳回答
   const results = [];
   for (const group of groups.values()) {
-    // 按质量分降序
-    group.answers.sort((a, b) => b.answer_quality - a.answer_quality);
+    computeCustomScores(group.answers);
+
+    // 按自定义评分降序排列
+    group.answers.sort((a, b) => b.custom_score - a.custom_score);
 
     const best = group.answers[0];
     group.best_answer = {
-      quality: best.answer_quality,
+      quality: best.answer_quality,          // 标注 Q
+      custom_score: best.custom_score,       // 自定义评分
       content: best.answer,
     };
 
@@ -187,7 +236,7 @@ function aggregateHits(esHits) {
     results.push(group);
   }
 
-  // 按组最高分降序
+  // 组间按 ES 相关性降序
   results.sort((a, b) => b._score - a._score);
 
   return results;
@@ -200,8 +249,8 @@ function aggregateHits(esHits) {
  *
  * @returns {{ hits: Array, took: string }}
  */
-async function search({ keyword, logic, useCustomRanking, from, size }) {
-  const body = buildSearchBody(keyword, logic, useCustomRanking, from, size);
+async function search({ keyword, logic, useCustomRanking, from, size, exclude }) {
+  const body = buildSearchBody(keyword, logic, useCustomRanking, from, size, exclude);
   const esResponse = await executeSearch(body);
 
   const hits = aggregateHits(esResponse.hits.hits);
