@@ -12,7 +12,7 @@ app.use(express.json());
 
 /* ---------- 路由 ---------- */
 
-const VALID_LOGIC = new Set(["match", "and", "or"]);
+const VALID_LOGIC = new Set(["match", "and", "or", "not"]);
 
 /**
  * POST /api/search
@@ -33,6 +33,7 @@ app.post("/api/search", async (req, res) => {
       keyword,
       logic = "match",
       use_custom_ranking: useCustomRanking = false,
+      exclude = "",
       page = 1,
       page_size: pageSize = 50,
     } = req.body;
@@ -52,12 +53,14 @@ app.post("/api/search", async (req, res) => {
     const size = Math.min(parseInt(pageSize, 10) || 50, 200);
 
     // --- 执行搜索 ---
+    // NOT 模式下基础查询逻辑用 match，排除词通过 exclude 传入
     const result = await search({
       keyword: keyword.trim(),
-      logic,
+      logic: logic === "not" ? "match" : logic,
       useCustomRanking: Boolean(useCustomRanking),
       from,
       size,
+      exclude: logic === "not" ? (typeof exclude === "string" ? exclude : "") : "",
     });
 
     return res.json(result);
