@@ -2,11 +2,39 @@
  * ES 查询构建器
  *
  * 根据前端传入的 logic / use_custom_ranking 参数，
- * 生成对应的 Elasticsearch Query DSL。
+ * 生成对应的 Elasticsearch Query DSL，并在 JS 端执行无监督特征重排。
  */
 
 const ES_HOST = process.env.ES_HOST || "http://localhost:9200";
 const ES_INDEX = process.env.ES_INDEX || "course_qa";
+
+/* ---------- 无监督多维特征打分算法 (新增) ---------- */
+
+const LOGIC_WORDS = [
+  "因为", "所以", "导致", "因此", "由于",
+  "相比", "但是", "不同于", "然而", "反之",
+  "比如", "例如", "包括", "如",
+  "首先", "其次", "一方面", "另一方面", "综上"
+];
+
+
+function computeCustomScore(answerText, bm25NormScore) {
+  // F1: ES 文本相关性 (55%)
+  const f1 = bm25NormScore;
+  // F2: 回答总长度 (15%)
+  const f2 = Math.min(answerText.length / 150, 1);
+  // F3: 词汇丰富度 (15%)
+  const textNoPunct = answerText.replace(/[。，！？；、""''（）\s]/g, "");
+  const f3 = Math.min(new Set(textNoPunct.split('')).size / 80, 1);
+  // F4: 逻辑论证深度 (15%)
+  let logicCount = 0;
+  for (const word of LOGIC_WORDS) {
+    if (answerText.includes(word)) logicCount++;
+  }
+  const f4 = Math.min(logicCount / 3, 1);
+
+  return (0.55 * f1 + 0.15 * f2 + 0.15 * f3 + 0.15 * f4) * 9;
+}
 
 /* ---------- 查询体构建 ---------- */
 
@@ -19,63 +47,47 @@ const ES_INDEX = process.env.ES_INDEX || "course_qa";
  */
 function buildBaseQuery(keyword, logic) {
   switch (logic) {
-    // AND: 结果必须同时包含所有关键词
     case "and":
       return {
-        multi_match: {
-          query: keyword,
-          fields: ["question", "answer"],
-          operator: "and",
-        },
+        multi_match: { query: keyword, fields: ["question", "answer"], operator: "and" },
       };
-
-    // OR: 结果包含任意一个关键词即可
     case "or":
       return {
         bool: {
-          should: [
-            { match: { question: keyword } },
-            { match: { answer: keyword } },
-          ],
+          should: [{ match: { question: keyword } }, { match: { answer: keyword } }],
           minimum_should_match: 1,
         },
       };
-
-    // match（默认）: 由 ES 按相关性评分
     case "match":
     default:
       return {
-        multi_match: {
-          query: keyword,
-          fields: ["question^2", "answer"],
-        },
+        multi_match: { query: keyword, fields: ["question^2", "answer"] },
       };
   }
 }
 
 /**
- * 构建完整查询体（含可选的综合排序）
+ * 构建完整查询体
  *
- * 当 useCustomRanking=true 时，使用 function_score 将文本相关性得分
- * 与 answer_quality 字段加权叠加，实现"高质量回答排在前面"的效果。
- *
- * 公式: final_score = text_score + log1p(factor * answer_quality)
+ * 算法改进说明：因为我们要使用复杂的 JS 文本特征提取，ES 的 function_score 无法实现。
+ * 所以这里统一向 ES 请求纯净的 BaseQuery，打分重排逻辑后置到 search 函数中处理。
  *
  * @param {string}  keyword
  * @param {string}  logic
- * @param {boolean} useCustomRanking
+ * @param {boolean} useCustomRanking (已移至 search 拦截处理，保留参数签名以兼容原代码)
  * @param {number}  from   分页偏移
  * @param {number}  size   每页条数
+ * @param {string}  exclude  排除关键词
  * @returns {object} 完整的 ES 请求体
  */
 function buildSearchBody(keyword, logic, useCustomRanking, from = 0, size = 100, exclude = "") {
-  let baseQuery = buildBaseQuery(keyword, logic);
+  let query = buildBaseQuery(keyword, logic);
 
   // NOT 排除逻辑：包含 keyword 但排除 exclude 中的词
   if (exclude && exclude.trim()) {
-    baseQuery = {
+    query = {
       bool: {
-        must: [baseQuery],
+        must: [query],
         must_not: [
           { multi_match: { query: exclude.trim(), fields: ["question", "answer"] } },
         ],
@@ -83,28 +95,10 @@ function buildSearchBody(keyword, logic, useCustomRanking, from = 0, size = 100,
     };
   }
 
-  const query = useCustomRanking
-    ? {
-        function_score: {
-          query: baseQuery,
-          functions: [
-            {
-              field_value_factor: {
-                field: "answer_quality",
-                modifier: "log1p",
-                factor: 2,
-              },
-            },
-          ],
-          boost_mode: "multiply",
-        },
-      }
-    : baseQuery;
-
   return {
     from,
     size,
-    query,
+    query, // 统一返回纯文本检索，去掉作弊的 function_score
     _source: [
       "doc_id",
       "dataset",
@@ -210,7 +204,7 @@ function aggregateHits(esHits) {
     }
 
     group.answers.push({
-      answer_quality: src.answer_quality,
+      answer_quality: src.answer_quality, // 保留前端展示用的标签
       answer: src.answer,
       _hit_score: hit._score, // 暂存，用于 computeCustomScores
     });
@@ -253,10 +247,25 @@ async function search({ keyword, logic, useCustomRanking, from, size, exclude })
   const body = buildSearchBody(keyword, logic, useCustomRanking, from, size, exclude);
   const esResponse = await executeSearch(body);
 
-  const hits = aggregateHits(esResponse.hits.hits);
+  let hits = esResponse.hits.hits;
+
+  // 【核心机制接入：无监督重排序 Re-ranking】
+  if (useCustomRanking && hits.length > 0) {
+    const maxScore = Math.max(...hits.map(h => h._score));
+    const minScore = Math.min(...hits.map(h => h._score));
+
+    hits.forEach(hit => {
+      // BM25 组内归一化
+      const bm25Norm = (maxScore === minScore) ? 1 : (hit._score - minScore) / (maxScore - minScore);
+      // 计算多维特征综合分数，并覆盖原本单纯的文本 BM25 分数
+      hit._score = computeCustomScore(hit._source.answer, bm25Norm);
+    });
+  }
+
+  const aggregatedHits = aggregateHits(hits);
   const took = (esResponse.took / 1000).toFixed(2); // ms → s
 
-  return { hits, took };
+  return { hits: aggregatedHits, took };
 }
 
 module.exports = { search, buildSearchBody, aggregateHits };
