@@ -24,7 +24,7 @@ function computeCustomScore(answerText, bm25NormScore) {
   // F2: 回答总长度 (15%)
   const f2 = Math.min(answerText.length / 150, 1);
   // F3: 词汇丰富度 (15%)
-  const textNoPunct = answerText.replace(/[。，！？；、“”‘’（）\s]/g, "");
+  const textNoPunct = answerText.replace(/[。，！？；、""''（）\s]/g, "");
   const f3 = Math.min(new Set(textNoPunct.split('')).size / 80, 1);
   // F4: 逻辑论证深度 (15%)
   let logicCount = 0;
@@ -77,10 +77,23 @@ function buildBaseQuery(keyword, logic) {
  * @param {boolean} useCustomRanking (已移至 search 拦截处理，保留参数签名以兼容原代码)
  * @param {number}  from   分页偏移
  * @param {number}  size   每页条数
+ * @param {string}  exclude  排除关键词
  * @returns {object} 完整的 ES 请求体
  */
-function buildSearchBody(keyword, logic, useCustomRanking, from = 0, size = 100) {
-  const query = buildBaseQuery(keyword, logic);
+function buildSearchBody(keyword, logic, useCustomRanking, from = 0, size = 100, exclude = "") {
+  let query = buildBaseQuery(keyword, logic);
+
+  // NOT 排除逻辑：包含 keyword 但排除 exclude 中的词
+  if (exclude && exclude.trim()) {
+    query = {
+      bool: {
+        must: [query],
+        must_not: [
+          { multi_match: { query: exclude.trim(), fields: ["question", "answer"] } },
+        ],
+      },
+    };
+  }
 
   return {
     from,
@@ -119,6 +132,47 @@ async function executeSearch(body) {
   return res.json();
 }
 
+/* ---------- 自定义答案评分：不使用 answer_quality ---------- */
+
+/**
+ * 为同一问题组内的每个答案计算自定义评分（0-9 范围）。
+ *
+ * 三个维度:
+ *   F1 — 回答长度（权重 0.50）: 更详尽的回答通常质量越高
+ *   F2 — ES 文本相关性（权重 0.25）: answer 与 query 的 BM25 匹配度
+ *   F3 — 词汇丰富度（权重 0.25）: 去重字符数越多，信息密度越大
+ *
+ * @param {Array}  answers  包含 _hit_score / answer 的答案数组
+ */
+function computeCustomScores(answers) {
+  if (answers.length === 0) return;
+
+  // ------- F2 归一化所需的组内极值 -------
+  const hitScores = answers.map(a => a._hit_score);
+  const maxS = Math.max(...hitScores);
+  const minS = Math.min(...hitScores);
+  const range = maxS - minS;
+
+  for (const ans of answers) {
+    // F1: 回答长度, 线性归一化，在 ~150 字符饱和
+    const f1 = Math.min(ans.answer.length / 150, 1);
+
+    // F2: ES 相关性分数, 组内 min-max 归一化
+    const f2 = range > 0 ? (ans._hit_score - minS) / range : 0.5;
+
+    // F3: 去标点后不重复字符数, 在 ~80 种字符饱和
+    const cleaned = ans.answer.replace(/[\s，。？！、""''：；（）\d\w.,:;!?]/g, "");
+    const uniqueChars = new Set(cleaned).size;
+    const f3 = Math.min(uniqueChars / 80, 1);
+
+    // 加权求和 → 映射到 0-9
+    ans.custom_score = parseFloat(((0.50 * f1 + 0.25 * f2 + 0.25 * f3) * 9).toFixed(1));
+
+    // 清除中间字段
+    delete ans._hit_score;
+  }
+}
+
 /* ---------- 结果聚合：扁平文档 → 按问题分组 ---------- */
 
 /**
@@ -144,6 +198,7 @@ function aggregateHits(esHits) {
 
     const group = groups.get(key);
 
+    // 保留组内最高 ES 分
     if (hit._score > group._score) {
       group._score = hit._score;
     }
@@ -151,18 +206,22 @@ function aggregateHits(esHits) {
     group.answers.push({
       answer_quality: src.answer_quality, // 保留前端展示用的标签
       answer: src.answer,
-      _calc_score: hit._score // 【核心修改】：记录传入的计算分数，用于替代原先按 answer_quality 排序
+      _hit_score: hit._score, // 暂存，用于 computeCustomScores
     });
   }
 
+  // 后处理：计算自定义评分 → 按自定义评分排序 → 选出最佳回答
   const results = [];
   for (const group of groups.values()) {
-    // 【核心修改】：抛弃看着答案打分的行为，改为根据我们算出来的 _calc_score 降序
-    group.answers.sort((a, b) => b._calc_score - a._calc_score);
+    computeCustomScores(group.answers);
+
+    // 按自定义评分降序排列
+    group.answers.sort((a, b) => b.custom_score - a.custom_score);
 
     const best = group.answers[0];
     group.best_answer = {
-      quality: best.answer_quality,
+      quality: best.answer_quality,          // 标注 Q
+      custom_score: best.custom_score,       // 自定义评分
       content: best.answer,
     };
 
@@ -171,6 +230,7 @@ function aggregateHits(esHits) {
     results.push(group);
   }
 
+  // 组间按 ES 相关性降序
   results.sort((a, b) => b._score - a._score);
 
   return results;
@@ -183,8 +243,8 @@ function aggregateHits(esHits) {
  *
  * @returns {{ hits: Array, took: string }}
  */
-async function search({ keyword, logic, useCustomRanking, from, size }) {
-  const body = buildSearchBody(keyword, logic, useCustomRanking, from, size);
+async function search({ keyword, logic, useCustomRanking, from, size, exclude }) {
+  const body = buildSearchBody(keyword, logic, useCustomRanking, from, size, exclude);
   const esResponse = await executeSearch(body);
 
   let hits = esResponse.hits.hits;
